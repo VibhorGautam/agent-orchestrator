@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as fsModule from "node:fs";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const testHome = join(process.cwd(), ".tmp-running-state-home");
 
-const { mockFsyncSync } = vi.hoisted(() => ({
+const { mockFsyncSync, mockWriteFileSync } = vi.hoisted(() => ({
   mockFsyncSync: vi.fn(),
+  mockWriteFileSync: vi.fn(),
 }));
 
 vi.mock("node:os", () => ({
@@ -23,6 +24,13 @@ vi.mock("node:fs", async (importOriginal) => {
       mockFsyncSync(...args);
       return actual.fsyncSync(...args);
     },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const override = mockWriteFileSync(...args);
+      if (override === "throw") {
+        throw new Error("synthetic disk-full");
+      }
+      return actual.writeFileSync(...args);
+    },
   };
 });
 
@@ -31,6 +39,11 @@ describe("running-state", () => {
     rmSync(testHome, { recursive: true, force: true });
     vi.restoreAllMocks();
     vi.resetModules();
+    // The hoisted node:fs wrappers persist across tests; reset their
+    // implementations so a previous test's mockImplementation can't
+    // leak into the next.
+    mockFsyncSync.mockReset();
+    mockWriteFileSync.mockReset();
   });
 
   afterEach(() => {
@@ -86,6 +99,31 @@ describe("running-state", () => {
       sessionIds: ["app-1", "app-2"],
     });
     expect(mockFsyncSync).toHaveBeenCalled();
+  });
+
+  it("writeLastStop leaves no temp file behind when the write itself throws", async () => {
+    // Match on the payload so the synthetic failure only fires on the
+    // data write, not the lockfile metadata write that fires first.
+    const marker = "marker-1743-disk-full";
+    mockWriteFileSync.mockImplementation((_fd: number, content: string) =>
+      typeof content === "string" && content.includes(marker) ? "throw" : undefined,
+    );
+    const runningState = await import("../../src/lib/running-state.js");
+
+    await expect(
+      runningState.writeLastStop({
+        stoppedAt: "2026-05-08T17:53:15.909Z",
+        projectId: marker,
+        sessionIds: ["app-1"],
+      }),
+    ).rejects.toThrow("synthetic disk-full");
+
+    const stateDir = join(testHome, ".agent-orchestrator");
+    const stale = existsSync(stateDir)
+      ? readdirSync(stateDir).filter((n) => n.startsWith("last-stop.json.tmp."))
+      : [];
+    expect(stale).toEqual([]);
+    expect(existsSync(join(stateDir, "last-stop.json"))).toBe(false);
   });
 
   it("readLastStop round-trips otherProjects through writeLastStop", async () => {

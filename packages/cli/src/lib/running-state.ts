@@ -299,11 +299,17 @@ export async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolea
 function atomicWriteFileSyncDurable(filePath: string, content: string): void {
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   const fd = openSync(tmpPath, "w");
+  let writeSucceeded = false;
   try {
     writeFileSync(fd, content, "utf-8");
     fsyncSync(fd);
+    writeSucceeded = true;
   } finally {
     try { closeSync(fd); } catch { /* best effort */ }
+    if (!writeSucceeded) {
+      // writeFileSync or fsyncSync threw — leave nothing on disk.
+      try { unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
   }
   try {
     renameSync(tmpPath, filePath);
