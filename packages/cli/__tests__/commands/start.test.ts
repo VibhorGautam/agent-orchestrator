@@ -1674,6 +1674,97 @@ describe("start command — orchestrator session strategy display", () => {
     expect(mockClearLastStop).toHaveBeenCalled();
   });
 
+  // Regression for issue #1743: when last-stop.json is missing or empty
+  // (e.g. because `ao stop` crashed before writing it, or `ao update`
+  // wiped state), `ao start` must still offer to restore recently
+  // `manually_killed` sessions by scanning the session manager.
+  it("falls back to recently manually-killed sessions when last-stop.json is missing (issue #1743)", async () => {
+    mockReadLastStop.mockResolvedValue(null);
+
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    const { findWebDir } = await import("../../src/lib/web-dir.js");
+    vi.mocked(findWebDir).mockReturnValue(tmpDir);
+    writeFileSync(join(tmpDir, "package.json"), "{}");
+
+    const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+    mockSpawn.mockReturnValue(fakeDashboard);
+
+    const recentTerminatedAt = new Date(Date.now() - 60_000).toISOString();
+    mockSessionManager.list.mockResolvedValue([
+      {
+        id: "app-1",
+        projectId: "my-app",
+        status: "killed",
+        activity: "exited",
+        metadata: {},
+        lastActivityAt: new Date(),
+        lifecycle: {
+          version: 2,
+          session: {
+            kind: "worker",
+            state: "terminated",
+            reason: "manually_killed",
+            startedAt: null,
+            completedAt: null,
+            terminatedAt: recentTerminatedAt,
+            lastTransitionAt: recentTerminatedAt,
+          },
+          pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
+          runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
+        },
+      },
+    ]);
+    mockSessionManager.restore.mockResolvedValue(undefined);
+
+    await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+
+    expect(mockSessionManager.restore).toHaveBeenCalledWith("app-1");
+  });
+
+  it("does not surface fallback candidates older than the recent window (issue #1743)", async () => {
+    mockReadLastStop.mockResolvedValue(null);
+
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    const { findWebDir } = await import("../../src/lib/web-dir.js");
+    vi.mocked(findWebDir).mockReturnValue(tmpDir);
+    writeFileSync(join(tmpDir, "package.json"), "{}");
+
+    const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+    mockSpawn.mockReturnValue(fakeDashboard);
+
+    // Terminated 30 minutes ago — beyond the 10-minute fallback window.
+    const oldTerminatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    mockSessionManager.list.mockResolvedValue([
+      {
+        id: "app-1",
+        projectId: "my-app",
+        status: "killed",
+        activity: "exited",
+        metadata: {},
+        lastActivityAt: new Date(),
+        lifecycle: {
+          version: 2,
+          session: {
+            kind: "worker",
+            state: "terminated",
+            reason: "manually_killed",
+            startedAt: null,
+            completedAt: null,
+            terminatedAt: oldTerminatedAt,
+            lastTransitionAt: oldTerminatedAt,
+          },
+          pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
+          runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
+        },
+      },
+    ]);
+
+    await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+
+    expect(mockSessionManager.restore).not.toHaveBeenCalled();
+    expect(mockPromptConfirm).not.toHaveBeenCalled();
+  });
+
   it("opens the bare dashboard URL when --no-orchestrator skips the orchestrator block", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
 
@@ -2242,6 +2333,118 @@ describe("start command — platform-aware runtime fallback", () => {
         .join("\n");
       expect(output).toContain("Attaching to running AO instance");
       expect(output).toContain("reattached to running daemon");
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
+  });
+
+  // Regression for issue #1743. Previously `ao stop` only wrote
+  // last-stop.json AFTER the kill loop; if the CLI was killed mid-
+  // shutdown (SIGKILL, crash, etc.) the record was lost and the
+  // restore prompt on the next `ao start` had nothing to surface.
+  // The fix pre-writes the record (with fsync) BEFORE the kill loop.
+  it("pre-writes last-stop.json before the kill loop runs (issue #1743)", async () => {
+    // Force the global-config fallback to a non-existent path so the
+    // test does not depend on the host's ~/.agent-orchestrator/config.yaml.
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    process.env["AO_GLOBAL_CONFIG"] = join(tmpDir, "no-such-global.yaml");
+
+    try {
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      mockGetRunning.mockResolvedValue({
+        pid: 99999,
+        configPath: "/fake/config.yaml",
+        port: 3000,
+        startedAt: new Date().toISOString(),
+        projects: ["my-app"],
+      });
+      mockSessionManager.list.mockResolvedValue([
+        {
+          id: "app-1",
+          projectId: "my-app",
+          status: "working",
+          activity: "active",
+          metadata: {},
+          lastActivityAt: new Date(),
+          runtimeHandle: { id: "tmux-1" },
+        },
+        {
+          id: "app-2",
+          projectId: "my-app",
+          status: "working",
+          activity: "active",
+          metadata: {},
+          lastActivityAt: new Date(),
+          runtimeHandle: { id: "tmux-2" },
+        },
+      ]);
+
+      const callOrder: string[] = [];
+      mockWriteLastStop.mockImplementation(async () => {
+        callOrder.push("writeLastStop");
+      });
+      mockSessionManager.kill.mockImplementation(async (id: string) => {
+        callOrder.push(`kill:${id}`);
+        return { cleaned: true, alreadyTerminated: false };
+      });
+      mockExec.mockRejectedValue(new Error("no process"));
+
+      await program.parseAsync(["node", "test", "stop"]);
+
+      // The first writeLastStop call must precede the first kill so the
+      // restore record is durable even if the CLI dies during the loop.
+      expect(callOrder.length).toBeGreaterThan(0);
+      expect(callOrder[0]).toBe("writeLastStop");
+      expect(callOrder).toContain("kill:app-1");
+      expect(callOrder).toContain("kill:app-2");
+      expect(callOrder.indexOf("writeLastStop")).toBeLessThan(callOrder.indexOf("kill:app-1"));
+
+      // The pre-write captures every active session's id so a mid-loop
+      // crash does not silently drop sessions.
+      const firstWrite = mockWriteLastStop.mock.calls[0][0];
+      expect(firstWrite.projectId).toBe("my-app");
+      expect(firstWrite.sessionIds).toEqual(expect.arrayContaining(["app-1", "app-2"]));
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
+  });
+
+  it("clears last-stop.json when every kill fails (no zombie restore prompt)", async () => {
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    process.env["AO_GLOBAL_CONFIG"] = join(tmpDir, "no-such-global.yaml");
+
+    try {
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      mockGetRunning.mockResolvedValue({
+        pid: 99999,
+        configPath: "/fake/config.yaml",
+        port: 3000,
+        startedAt: new Date().toISOString(),
+        projects: ["my-app"],
+      });
+      mockSessionManager.list.mockResolvedValue([
+        {
+          id: "app-1",
+          projectId: "my-app",
+          status: "working",
+          activity: "active",
+          metadata: {},
+          lastActivityAt: new Date(),
+          runtimeHandle: { id: "tmux-1" },
+        },
+      ]);
+      mockSessionManager.kill.mockRejectedValue(new Error("permission denied"));
+      mockExec.mockRejectedValue(new Error("no process"));
+
+      await program.parseAsync(["node", "test", "stop"]);
+
+      // Pre-write happens, then kill fails, then we clear so the next
+      // `ao start` does not prompt to "restore" sessions that are still
+      // alive.
+      expect(mockWriteLastStop).toHaveBeenCalledTimes(1);
+      expect(mockClearLastStop).toHaveBeenCalled();
     } finally {
       if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
       else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;

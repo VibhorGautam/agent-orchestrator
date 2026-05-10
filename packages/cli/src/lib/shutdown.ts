@@ -22,7 +22,7 @@ import { stopBunTmpJanitor } from "./bun-tmp-janitor.js";
 import { getSessionManager } from "./create-session-manager.js";
 import { stopAllLifecycleWorkers } from "./lifecycle-service.js";
 import { stopProjectSupervisor } from "./project-supervisor.js";
-import { unregister, writeLastStop } from "./running-state.js";
+import { clearLastStop, unregister, writeLastStop } from "./running-state.js";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -79,6 +79,35 @@ export function installShutdownHandlers(ctx: ShutdownContext): void {
         const allSessions = await sm.list();
         const activeSessions = allSessions.filter((s) => !isTerminalSession(s));
 
+        // Pre-write last-stop.json BEFORE the kill loop. The handler
+        // is racing the 10-second force-exit timer (and any concurrent
+        // SIGKILL); writing first (with fsync) ensures the restore
+        // record survives even if the loop is cut short. We rewrite
+        // below with the actually-killed set after the loop. Issue #1743.
+        const stoppedAtIso = new Date().toISOString();
+        const targetActiveIds = activeSessions
+          .filter((s) => s.projectId === ctx.projectId)
+          .map((s) => s.id);
+        const preOtherByProject = new Map<string, string[]>();
+        for (const s of activeSessions) {
+          if (s.projectId === ctx.projectId) continue;
+          const list = preOtherByProject.get(s.projectId ?? "unknown") ?? [];
+          list.push(s.id);
+          preOtherByProject.set(s.projectId ?? "unknown", list);
+        }
+        if (activeSessions.length > 0) {
+          const preOtherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
+          for (const [pid, ids] of preOtherByProject) {
+            preOtherProjects.push({ projectId: pid, sessionIds: ids });
+          }
+          await writeLastStop({
+            stoppedAt: stoppedAtIso,
+            projectId: ctx.projectId,
+            sessionIds: targetActiveIds,
+            otherProjects: preOtherProjects.length > 0 ? preOtherProjects : undefined,
+          });
+        }
+
         const killedSessionIds: string[] = [];
         for (const session of activeSessions) {
           try {
@@ -91,28 +120,39 @@ export function installShutdownHandlers(ctx: ShutdownContext): void {
           }
         }
 
-        if (killedSessionIds.length > 0) {
-          const targetIds = killedSessionIds.filter((id) =>
-            activeSessions.some((s) => s.id === id && s.projectId === ctx.projectId),
-          );
-          const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
-          const otherByProject = new Map<string, string[]>();
-          for (const s of activeSessions) {
-            if (s.projectId === ctx.projectId) continue;
-            if (!killedSessionIds.includes(s.id)) continue;
-            const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
-            list.push(s.id);
-            otherByProject.set(s.projectId ?? "unknown", list);
+        // Reconcile last-stop.json with actual kill results.
+        if (activeSessions.length > 0) {
+          if (killedSessionIds.length === 0) {
+            await clearLastStop();
+          } else if (killedSessionIds.length < activeSessions.length) {
+            const targetIds = killedSessionIds.filter((id) =>
+              activeSessions.some((s) => s.id === id && s.projectId === ctx.projectId),
+            );
+            const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
+            const otherByProject = new Map<string, string[]>();
+            for (const s of activeSessions) {
+              if (s.projectId === ctx.projectId) continue;
+              if (!killedSessionIds.includes(s.id)) continue;
+              const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
+              list.push(s.id);
+              otherByProject.set(s.projectId ?? "unknown", list);
+            }
+            for (const [pid, ids] of otherByProject) {
+              otherProjects.push({ projectId: pid, sessionIds: ids });
+            }
+            if (targetIds.length > 0 || otherProjects.length > 0) {
+              await writeLastStop({
+                stoppedAt: stoppedAtIso,
+                projectId: ctx.projectId,
+                sessionIds: targetIds,
+                otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
+              });
+            } else {
+              await clearLastStop();
+            }
           }
-          for (const [pid, ids] of otherByProject) {
-            otherProjects.push({ projectId: pid, sessionIds: ids });
-          }
-          await writeLastStop({
-            stoppedAt: new Date().toISOString(),
-            projectId: ctx.projectId,
-            sessionIds: targetIds,
-            otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
-          });
+          // killedSessionIds.length === activeSessions.length: the pre-write
+          // already records the correct set, no rewrite needed.
         }
 
         await sweepDaemonChildren({ ownerPid: process.pid });

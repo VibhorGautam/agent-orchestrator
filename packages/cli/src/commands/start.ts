@@ -105,6 +105,7 @@ import {
 } from "../lib/install-helpers.js";
 import { ensureGit, runtimePreflight } from "../lib/startup-preflight.js";
 import { installShutdownHandlers, isShutdownInProgress } from "../lib/shutdown.js";
+import { findRecentlyKilledSessions } from "../lib/last-stop-fallback.js";
 import { resolveOrCreateProject } from "../lib/resolve-project.js";
 import { pathsEqual } from "../lib/path-equality.js";
 import { maybePromptForUpdateChannel } from "../lib/update-channel-onboarding.js";
@@ -967,11 +968,28 @@ async function runStartup(
     }
   }
 
-  // Check for sessions from last `ao stop` and offer to restore them
+  // Check for sessions from last `ao stop` and offer to restore them.
+  // If `last-stop.json` is missing or empty (which can happen if the
+  // record never made it to disk — see issue #1743), fall back to a
+  // scan of recently `manually_killed` sessions so the restore prompt
+  // still fires.
   if (isHumanCaller()) {
     try {
-      const lastStop = await readLastStop();
-      if (lastStop && lastStop.sessionIds.length > 0) {
+      let lastStop = await readLastStop();
+      const lastStopHasContent =
+        !!lastStop &&
+        (lastStop.sessionIds.length > 0 || (lastStop.otherProjects ?? []).length > 0);
+      if (!lastStopHasContent) {
+        const fallbackSm = await getSessionManager(config);
+        const fallback = await findRecentlyKilledSessions(fallbackSm, projectId);
+        if (
+          fallback &&
+          (fallback.sessionIds.length > 0 || (fallback.otherProjects ?? []).length > 0)
+        ) {
+          lastStop = fallback;
+        }
+      }
+      if (lastStop && (lastStop.sessionIds.length > 0 || (lastStop.otherProjects ?? []).length > 0)) {
         const stoppedAgo = `stopped at ${new Date(lastStop.stoppedAt).toLocaleString()}`;
         const otherProjects = lastStop.otherProjects ?? [];
 
@@ -1784,6 +1802,33 @@ export function registerStop(program: Command): void {
           const otherActive = activeSessions.filter((s) => s.projectId !== _projectId);
           // Group other-project sessions by projectId (used for display + recording)
           const otherByProject = new Map<string, string[]>();
+          for (const s of otherActive) {
+            const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
+            list.push(s.id);
+            otherByProject.set(s.projectId ?? "unknown", list);
+          }
+
+          // Pre-write last-stop.json BEFORE the kill loop. The kill loop
+          // ends with SIGTERM to the parent ao start process, which races
+          // with this CLI's own teardown — if we wrote the record AFTER
+          // the loop and a SIGKILL/crash landed mid-shutdown, the file
+          // would be lost and `ao start` would have nothing to restore
+          // from. Writing first (with fsync) makes the record durable.
+          // We rewrite below with the actually-killed set after the loop
+          // completes for accuracy. Issue #1743.
+          const stoppedAtIso = new Date().toISOString();
+          if (activeSessions.length > 0) {
+            const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
+            for (const [pid, ids] of otherByProject) {
+              otherProjects.push({ projectId: pid, sessionIds: ids });
+            }
+            await writeLastStop({
+              stoppedAt: stoppedAtIso,
+              projectId: _projectId,
+              sessionIds: targetActive.map((s) => s.id),
+              otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
+            });
+          }
 
           if (activeSessions.length > 0) {
             const spinner = ora(`Stopping ${activeSessions.length} active session(s)`).start();
@@ -1820,32 +1865,53 @@ export function registerStop(program: Command): void {
             if (killedTarget.length > 0) {
               console.log(chalk.green(`  ${project.name}: ${killedTarget.join(", ")}`));
             }
+            const killedOtherByProject = new Map<string, string[]>();
             for (const s of otherActive) {
               if (!killedSessionIds.includes(s.id)) continue;
-              const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
+              const list = killedOtherByProject.get(s.projectId ?? "unknown") ?? [];
               list.push(s.id);
-              otherByProject.set(s.projectId ?? "unknown", list);
+              killedOtherByProject.set(s.projectId ?? "unknown", list);
             }
-            for (const [pid, ids] of otherByProject) {
+            for (const [pid, ids] of killedOtherByProject) {
               console.log(chalk.green(`  ${pid}: ${ids.join(", ")}`));
             }
           } else {
             console.log(chalk.yellow(`No active sessions found`));
           }
 
-          // Record stopped sessions for restore on next `ao start`
-          if (killedSessionIds.length > 0) {
-            const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
-            for (const [pid, ids] of otherByProject) {
-              otherProjects.push({ projectId: pid, sessionIds: ids });
+          // Reconcile last-stop.json with actual kill results. The
+          // pre-write above optimistically recorded every active
+          // session; correct it now that we know which ones actually
+          // got killed. If nothing was killed (every kill failed) we
+          // clear the record so `ao start` does not prompt to "restore"
+          // sessions that are still alive.
+          if (activeSessions.length > 0) {
+            if (killedSessionIds.length === 0) {
+              await clearLastStop();
+            } else if (killedSessionIds.length < activeSessions.length) {
+              const survivingTarget = targetActive
+                .filter((s) => killedSessionIds.includes(s.id))
+                .map((s) => s.id);
+              const survivingOther: Array<{ projectId: string; sessionIds: string[] }> = [];
+              for (const [pid, ids] of otherByProject) {
+                const survivors = ids.filter((id) => killedSessionIds.includes(id));
+                if (survivors.length > 0) {
+                  survivingOther.push({ projectId: pid, sessionIds: survivors });
+                }
+              }
+              if (survivingTarget.length > 0 || survivingOther.length > 0) {
+                await writeLastStop({
+                  stoppedAt: stoppedAtIso,
+                  projectId: _projectId,
+                  sessionIds: survivingTarget,
+                  otherProjects: survivingOther.length > 0 ? survivingOther : undefined,
+                });
+              } else {
+                await clearLastStop();
+              }
             }
-
-            await writeLastStop({
-              stoppedAt: new Date().toISOString(),
-              projectId: _projectId,
-              sessionIds: killedSessionIds.filter((id) => targetActive.some((s) => s.id === id)),
-              otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
-            });
+            // If killedSessionIds.length === activeSessions.length, the
+            // pre-write already records the correct set — skip the rewrite.
           }
         } catch (err) {
           console.log(
