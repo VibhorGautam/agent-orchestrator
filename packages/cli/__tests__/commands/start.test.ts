@@ -1679,65 +1679,143 @@ describe("start command — orchestrator session strategy display", () => {
   // wiped state), `ao start` must still offer to restore recently
   // `manually_killed` sessions by scanning the session manager.
   it("falls back to recently manually-killed sessions when last-stop.json is missing (issue #1743)", async () => {
-    mockReadLastStop.mockResolvedValue(null);
+    // Force getGlobalConfigPath() to a non-existent path so the fallback's
+    // global-config load is a no-op and the test does not read the host's
+    // real ~/.agent-orchestrator/config.yaml.
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    process.env["AO_GLOBAL_CONFIG"] = join(tmpDir, "no-such-global.yaml");
 
-    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
-    const { findWebDir } = await import("../../src/lib/web-dir.js");
-    vi.mocked(findWebDir).mockReturnValue(tmpDir);
-    writeFileSync(join(tmpDir, "package.json"), "{}");
+    try {
+      mockReadLastStop.mockResolvedValue(null);
 
-    const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
-    mockSpawn.mockReturnValue(fakeDashboard);
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      const { findWebDir } = await import("../../src/lib/web-dir.js");
+      vi.mocked(findWebDir).mockReturnValue(tmpDir);
+      writeFileSync(join(tmpDir, "package.json"), "{}");
 
-    const recentTerminatedAt = new Date(Date.now() - 60_000).toISOString();
-    mockSessionManager.list.mockResolvedValue([
-      {
-        id: "app-1",
-        projectId: "my-app",
-        status: "killed",
-        activity: "exited",
-        metadata: {},
-        lastActivityAt: new Date(),
-        lifecycle: {
-          version: 2,
-          session: {
-            kind: "worker",
-            state: "terminated",
-            reason: "manually_killed",
-            startedAt: null,
-            completedAt: null,
-            terminatedAt: recentTerminatedAt,
-            lastTransitionAt: recentTerminatedAt,
+      const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+      mockSpawn.mockReturnValue(fakeDashboard);
+
+      const recentTerminatedAt = new Date(Date.now() - 60_000).toISOString();
+      mockSessionManager.list.mockResolvedValue([
+        {
+          id: "app-1",
+          projectId: "my-app",
+          status: "killed",
+          activity: "exited",
+          metadata: {},
+          lastActivityAt: new Date(),
+          lifecycle: {
+            version: 2,
+            session: {
+              kind: "worker",
+              state: "terminated",
+              reason: "manually_killed",
+              startedAt: null,
+              completedAt: null,
+              terminatedAt: recentTerminatedAt,
+              lastTransitionAt: recentTerminatedAt,
+            },
+            pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
+            runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
           },
-          pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
-          runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
         },
-      },
-    ]);
-    mockSessionManager.restore.mockResolvedValue(undefined);
+      ]);
+      mockSessionManager.restore.mockResolvedValue(undefined);
 
-    await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+      await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
 
-    expect(mockSessionManager.restore).toHaveBeenCalledWith("app-1");
+      expect(mockSessionManager.restore).toHaveBeenCalledWith("app-1");
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
   });
 
   it("does not surface fallback candidates older than the recent window (issue #1743)", async () => {
-    mockReadLastStop.mockResolvedValue(null);
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    process.env["AO_GLOBAL_CONFIG"] = join(tmpDir, "no-such-global.yaml");
 
-    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
-    const { findWebDir } = await import("../../src/lib/web-dir.js");
-    vi.mocked(findWebDir).mockReturnValue(tmpDir);
-    writeFileSync(join(tmpDir, "package.json"), "{}");
+    try {
+      mockReadLastStop.mockResolvedValue(null);
 
-    const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
-    mockSpawn.mockReturnValue(fakeDashboard);
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      const { findWebDir } = await import("../../src/lib/web-dir.js");
+      vi.mocked(findWebDir).mockReturnValue(tmpDir);
+      writeFileSync(join(tmpDir, "package.json"), "{}");
 
-    // Terminated 30 minutes ago — beyond the 10-minute fallback window.
-    const oldTerminatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    mockSessionManager.list.mockResolvedValue([
-      {
-        id: "app-1",
-        projectId: "my-app",
+      const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+      mockSpawn.mockReturnValue(fakeDashboard);
+
+      // Terminated 30 minutes ago — beyond the 10-minute fallback window.
+      const oldTerminatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      mockSessionManager.list.mockResolvedValue([
+        {
+          id: "app-1",
+          projectId: "my-app",
+          status: "killed",
+          activity: "exited",
+          metadata: {},
+          lastActivityAt: new Date(),
+          lifecycle: {
+            version: 2,
+            session: {
+              kind: "worker",
+              state: "terminated",
+              reason: "manually_killed",
+              startedAt: null,
+              completedAt: null,
+              terminatedAt: oldTerminatedAt,
+              lastTransitionAt: oldTerminatedAt,
+            },
+            pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
+            runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
+          },
+        },
+      ]);
+
+      await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+
+      expect(mockSessionManager.restore).not.toHaveBeenCalled();
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
+  });
+
+  // Regression for Greptile P1 on PR #1780. Before the fix, the fallback's
+  // session manager was built from the project-scoped config, so `sm.list()`
+  // only saw the current project's sessions and `otherProjects` in the
+  // synthesized LastStopState was always empty — defeating the cross-project
+  // restore that `readLastStop()` already supports.
+  it("fallback uses the global config so cross-project sessions appear in otherProjects (PR #1780)", async () => {
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    const globalPath = join(tmpDir, "global-config.yaml");
+    // Real, parseable global config so loadConfig(globalPath) succeeds and
+    // existsSync(globalPath) returns true. Contents don't have to match the
+    // mocked sessions — getSessionManager is mocked to ignore config.
+    writeFileSync(
+      globalPath,
+      "version: 1\nport: 3000\nprojects:\n  my-app:\n    name: My App\n    path: /tmp/my-app\n    sessionPrefix: app\n  other-app:\n    name: Other App\n    path: /tmp/other-app\n    sessionPrefix: other\n",
+    );
+    process.env["AO_GLOBAL_CONFIG"] = globalPath;
+
+    try {
+      mockReadLastStop.mockResolvedValue(null);
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      const { findWebDir } = await import("../../src/lib/web-dir.js");
+      vi.mocked(findWebDir).mockReturnValue(tmpDir);
+      writeFileSync(join(tmpDir, "package.json"), "{}");
+
+      const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+      mockSpawn.mockReturnValue(fakeDashboard);
+      mockPromptConfirm.mockResolvedValue(true);
+
+      const recent = new Date(Date.now() - 60_000).toISOString();
+      const terminated = (id: string, projectId: string) => ({
+        id,
+        projectId,
         status: "killed",
         activity: "exited",
         metadata: {},
@@ -1750,19 +1828,30 @@ describe("start command — orchestrator session strategy display", () => {
             reason: "manually_killed",
             startedAt: null,
             completedAt: null,
-            terminatedAt: oldTerminatedAt,
-            lastTransitionAt: oldTerminatedAt,
+            terminatedAt: recent,
+            lastTransitionAt: recent,
           },
           pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
           runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
         },
-      },
-    ]);
+      });
 
-    await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+      mockSessionManager.list.mockResolvedValue([
+        terminated("app-1", "my-app"),
+        terminated("other-1", "other-app"),
+      ]);
+      mockSessionManager.restore.mockResolvedValue(undefined);
 
-    expect(mockSessionManager.restore).not.toHaveBeenCalled();
-    expect(mockPromptConfirm).not.toHaveBeenCalled();
+      await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+
+      // Both the in-project session AND the cross-project session must be
+      // routed to restore. Pre-fix, only "app-1" would have been seen.
+      expect(mockSessionManager.restore).toHaveBeenCalledWith("app-1");
+      expect(mockSessionManager.restore).toHaveBeenCalledWith("other-1");
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
   });
 
   it("opens the bare dashboard URL when --no-orchestrator skips the orchestrator block", async () => {

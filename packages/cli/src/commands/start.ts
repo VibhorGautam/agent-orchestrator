@@ -980,7 +980,19 @@ async function runStartup(
         !!lastStop &&
         (lastStop.sessionIds.length > 0 || (lastStop.otherProjects ?? []).length > 0);
       if (!lastStopHasContent) {
-        const fallbackSm = await getSessionManager(config);
+        // Use the global config so `sm.list()` sees sessions from every
+        // registered project. The project-scoped `config` only sees the
+        // current project's sessions, which would silently drop the
+        // cross-project rows the existing `readLastStop` path preserves
+        // via `otherProjects`. The restore step on line ~1002 already
+        // promotes to the global config when otherProjects is non-empty,
+        // so this just ensures the fallback can populate that array.
+        let fallbackConfig = config;
+        const globalPath = getGlobalConfigPath();
+        if (existsSync(globalPath)) {
+          fallbackConfig = loadConfig(globalPath);
+        }
+        const fallbackSm = await getSessionManager(fallbackConfig);
         const fallback = await findRecentlyKilledSessions(fallbackSm, projectId);
         if (
           fallback &&
