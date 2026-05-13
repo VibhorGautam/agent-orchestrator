@@ -691,13 +691,86 @@ describe("SessionPage project polling", () => {
 
     const latestProps = sessionDetailSpy.mock.lastCall?.[0] as {
       sidebarError?: boolean;
+      sidebarRefreshFailed?: boolean;
       sidebarLoading?: boolean;
       sidebarSessions?: DashboardSession[] | null;
     };
 
     expect(latestProps.sidebarLoading).toBe(false);
     expect(latestProps.sidebarError).toBe(true);
+    expect(latestProps.sidebarRefreshFailed).toBe(false);
     expect(latestProps.sidebarSessions).toEqual([]);
+  });
+
+  it("classifies sidebar retry failures with cached sessions as refresh failures", async () => {
+    const workerSession = makeWorkerSession();
+    const sidebarSessions = [workerSession];
+    let failSidebar = false;
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/projects") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            projects: [{ id: "my-app", name: "My App", sessionPrefix: "my-app" }],
+          }),
+        } as Response;
+      }
+
+      if (url === "/api/sessions/worker-1") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => workerSession,
+        } as Response;
+      }
+
+      if (url === "/api/sessions?fresh=true") {
+        return {
+          ok: !failSidebar,
+          status: failSidebar ? 500 : 200,
+          json: async () => (failSidebar ? {} : { sessions: sidebarSessions }),
+        } as Response;
+      }
+
+      if (url === "/api/sessions?project=my-app&orchestratorOnly=true&fresh=true") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ orchestratorId: "my-app-orchestrator" }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const { default: SessionPage } = await import("./page");
+
+    render(<SessionPage />);
+    await flushAsyncWork();
+
+    let latestProps = sessionDetailSpy.mock.lastCall?.[0] as {
+      onRetrySidebar?: () => Promise<void>;
+      sidebarError?: boolean;
+      sidebarRefreshFailed?: boolean;
+      sidebarSessions?: DashboardSession[] | null;
+    };
+    expect(latestProps.sidebarError).toBe(false);
+    expect(latestProps.sidebarRefreshFailed).toBe(false);
+    expect(latestProps.sidebarSessions).toEqual(sidebarSessions);
+
+    failSidebar = true;
+    await act(async () => {
+      await latestProps.onRetrySidebar?.();
+    });
+    await flushAsyncWork();
+
+    latestProps = sessionDetailSpy.mock.lastCall?.[0] as typeof latestProps;
+    expect(latestProps.sidebarError).toBe(true);
+    expect(latestProps.sidebarRefreshFailed).toBe(true);
+    expect(latestProps.sidebarSessions).toEqual(sidebarSessions);
   });
 
   it("applies mux snapshots that arrive before the initial sidebar fetch resolves", async () => {
