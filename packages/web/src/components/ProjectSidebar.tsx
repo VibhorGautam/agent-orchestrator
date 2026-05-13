@@ -33,7 +33,8 @@ interface ProjectSidebarProps {
   activeProjectId: string | undefined;
   activeSessionId: string | undefined;
   loading?: boolean;
-  error?: boolean;
+  firstLoadFailed?: boolean;
+  refreshFailed?: boolean;
   onRetry?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -155,7 +156,8 @@ function ProjectSidebarInner({
   activeProjectId,
   activeSessionId,
   loading = false,
-  error = false,
+  firstLoadFailed = false,
+  refreshFailed = false,
   onRetry,
   collapsed = false,
   onToggleCollapsed: _onToggleCollapsed,
@@ -320,8 +322,7 @@ function ProjectSidebarInner({
     // Auto-derived displayName isn't pre-filled (user-set flag absent) — start
     // from the live title so the user types over the visible label.
     const pending = pendingRenames.get(session.id);
-    const initial =
-      pending ?? (session.displayNameUserSet ? (session.displayName ?? "") : "");
+    const initial = pending ?? (session.displayNameUserSet ? (session.displayName ?? "") : "");
     setEditingSessionId(session.id);
     setEditingValue(initial || currentTitle);
   };
@@ -524,7 +525,7 @@ function ProjectSidebarInner({
 
       {/* Stale-data banner: keep cached sessions visible on fetch failure but
             surface the error so users know the list may be out of date. */}
-      {error && sessions && sessions.length > 0 ? (
+      {refreshFailed && sessions && sessions.length > 0 ? (
         <div
           role="status"
           className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
@@ -911,7 +912,7 @@ function ProjectSidebarInner({
                         </div>
                       );
                     })
-                  ) : error ? (
+                  ) : firstLoadFailed ? (
                     <div className="px-3 py-2">
                       <div className="project-sidebar__empty">Failed to load sessions</div>
                       <button

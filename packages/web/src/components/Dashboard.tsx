@@ -161,7 +161,14 @@ function DashboardInner({
     }
     return levels;
   }, [initialSessions, attentionZones]);
-  const { sessions, attentionLevels, liveSessionsResolved, loadError } = useSessionEvents({
+  const {
+    sessions,
+    attentionLevels,
+    liveSessionsResolved,
+    loadError,
+    firstLoadFailed,
+    refreshFailed,
+  } = useSessionEvents({
     initialSessions,
     // No project filter — sidebar needs all sessions across all projects.
     // Kanban filtering is applied client-side via projectSessions below.
@@ -185,6 +192,7 @@ function DashboardInner({
   const ssrLoadError = recoveredFromLoadError ? undefined : dashboardLoadError;
   // Live WS error takes precedence; fall back to SSR load error when live data hasn't resolved it.
   const visibleLoadError = loadError ?? ssrLoadError;
+  const sidebarFirstLoadFailed = firstLoadFailed || Boolean(ssrLoadError && sessions.length === 0);
   const searchParams = useSearchParams();
   const router = useRouter();
   const routerRef = useRef(router);
@@ -643,6 +651,8 @@ function DashboardInner({
                 orchestrators={activeOrchestrators}
                 activeProjectId={projectId}
                 activeSessionId={activeSessionId}
+                firstLoadFailed={sidebarFirstLoadFailed}
+                refreshFailed={refreshFailed}
                 collapsed={sidebarCollapsed}
                 onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
                 onMobileClose={() => setMobileMenuOpen(false)}

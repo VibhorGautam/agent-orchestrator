@@ -176,7 +176,7 @@ export function SessionDetail({
                 sessions={sidebarSessions}
                 orchestrators={sidebarOrchestrators}
                 loading={sidebarLoading}
-                error={sidebarError}
+                firstLoadFailed={sidebarError}
                 onRetry={onRetrySidebar}
                 activeProjectId={session.projectId}
                 activeSessionId={session.id}

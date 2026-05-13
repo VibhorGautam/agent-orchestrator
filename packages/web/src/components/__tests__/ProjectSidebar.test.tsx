@@ -123,6 +123,46 @@ describe("ProjectSidebar", () => {
     expect(screen.getByRole("button", { name: /new project/i })).toBeInTheDocument();
   });
 
+  it("shows a first-load failure only for the empty session state", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        firstLoadFailed
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Failed to load sessions")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Failed to refresh · showing cached sessions"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a cached-data refresh banner without replacing visible sessions", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[
+          makeSession({
+            id: "project-1-session",
+            projectId: "project-1",
+            branch: "feat/cached",
+          }),
+        ]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        refreshFailed
+      />,
+    );
+
+    expect(screen.getByText("Failed to refresh · showing cached sessions")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to load sessions")).not.toBeInTheDocument();
+    expect(screen.getByText("feat/cached")).toBeInTheDocument();
+  });
+
   it("marks the active project row as the current page", () => {
     render(
       <ProjectSidebar

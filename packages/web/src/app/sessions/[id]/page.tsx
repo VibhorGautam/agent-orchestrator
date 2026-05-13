@@ -5,10 +5,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import { ACTIVITY_STATE, SESSION_STATUS, isOrchestratorSession } from "@aoagents/ao-core/types";
 import { SessionDetail } from "@/components/SessionDetail";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
-import {
-  ProjectSidebar,
-  type ProjectSidebarOrchestrator,
-} from "@/components/ProjectSidebar";
+import { ProjectSidebar, type ProjectSidebarOrchestrator } from "@/components/ProjectSidebar";
 import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
@@ -279,7 +276,7 @@ function SessionPageShell({
               sessions={sidebarSessions}
               orchestrators={sidebarOrchestrators}
               loading={sidebarLoading}
-              error={sidebarError}
+              firstLoadFailed={sidebarError}
               onRetry={onRetrySidebar}
               activeProjectId={activeProjectId}
               activeSessionId={activeSessionId}

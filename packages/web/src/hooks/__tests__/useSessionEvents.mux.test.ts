@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { useSessionEvents } from "../useSessionEvents";
 import type { DashboardSession } from "@/lib/types";
 
@@ -19,6 +19,7 @@ describe("useSessionEvents - mux", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("triggers refresh when mux patch contains unknown id", async () => {
@@ -107,6 +108,127 @@ describe("useSessionEvents - mux", () => {
       "[useSessionEvents] refresh failed:",
       expect.anything(),
     );
-    vi.useRealTimers();
+  });
+
+  it("marks mux errors as refresh failures when cached sessions exist", async () => {
+    const initialSessions = [s1];
+    const { result } = renderHook(() =>
+      useSessionEvents({
+        initialSessions,
+        muxLastError: "mux exploded",
+        attentionZones: "simple",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.refreshFailed).toBe(true);
+    });
+    expect(result.current.firstLoadFailed).toBe(false);
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("marks mux errors as first-load failures when no sessions have resolved", async () => {
+    const initialSessions: DashboardSession[] = [];
+    const { result } = renderHook(() =>
+      useSessionEvents({
+        initialSessions,
+        muxLastError: "mux exploded",
+        attentionZones: "simple",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.firstLoadFailed).toBe(true);
+    });
+    expect(result.current.refreshFailed).toBe(false);
+    expect(result.current.loadError).toBe("mux exploded");
+  });
+
+  it("clears refresh failures on the next successful mux snapshot", async () => {
+    const initialSessions = [s1];
+    const { result, rerender } = renderHook(
+      (props: {
+        muxLastError?: string | null;
+        muxSessions?: Parameters<typeof useSessionEvents>[0]["muxSessions"];
+      }) =>
+        useSessionEvents({
+          initialSessions,
+          muxLastError: props.muxLastError,
+          muxSessions: props.muxSessions,
+          attentionZones: "simple",
+        }),
+      { initialProps: { muxLastError: "mux exploded", muxSessions: undefined } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.refreshFailed).toBe(true);
+    });
+
+    rerender({
+      muxLastError: "mux exploded",
+      muxSessions: [
+        {
+          id: "s1",
+          status: "working",
+          activity: "active",
+          attentionLevel: "working",
+          lastActivityAt: now,
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(result.current.refreshFailed).toBe(false);
+    });
+    expect(result.current.firstLoadFailed).toBe(false);
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("marks HTTP refresh errors as refresh failures", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: "refresh exploded" }),
+      } as unknown as Response),
+    );
+
+    const initialSessions = [s1];
+    const muxSessions = [
+      {
+        id: "s1",
+        status: "working",
+        activity: "active",
+        attentionLevel: "working" as const,
+        lastActivityAt: now,
+      },
+      {
+        id: "s2",
+        status: "working",
+        activity: "active",
+        attentionLevel: "working" as const,
+        lastActivityAt: now,
+      },
+    ];
+    const { result } = renderHook(() =>
+      useSessionEvents({
+        initialSessions,
+        project: "proj",
+        muxSessions,
+        attentionZones: "simple",
+      }),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+      await Promise.resolve();
+    });
+
+    expect(result.current.refreshFailed).toBe(true);
+    expect(result.current.firstLoadFailed).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith("[useSessionEvents] refresh failed:", expect.any(Error));
   });
 });
