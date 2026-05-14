@@ -90,6 +90,7 @@ const {
   mockReadLastStop,
   mockWriteLastStop,
   mockClearLastStop,
+  mockMarkLastStopAcknowledged,
 } = vi.hoisted(() => ({
   mockAcquireStartupLock: vi.fn().mockResolvedValue(() => {}),
   mockIsAlreadyRunning: vi.fn().mockReturnValue(null),
@@ -102,6 +103,7 @@ const {
   mockReadLastStop: vi.fn().mockResolvedValue(null),
   mockWriteLastStop: vi.fn().mockResolvedValue(undefined),
   mockClearLastStop: vi.fn().mockResolvedValue(undefined),
+  mockMarkLastStopAcknowledged: vi.fn().mockResolvedValue(undefined),
 }));
 
 const { mockIsHumanCaller } = vi.hoisted(() => ({
@@ -205,6 +207,7 @@ vi.mock("../../src/lib/running-state.js", () => ({
   writeLastStop: (...args: unknown[]) => mockWriteLastStop(...args),
   readLastStop: (...args: unknown[]) => mockReadLastStop(...args),
   clearLastStop: (...args: unknown[]) => mockClearLastStop(...args),
+  markLastStopAcknowledged: (...args: unknown[]) => mockMarkLastStopAcknowledged(...args),
 }));
 
 vi.mock("../../src/lib/caller-context.js", () => ({
@@ -458,6 +461,8 @@ beforeEach(async () => {
   mockWriteLastStop.mockResolvedValue(undefined);
   mockClearLastStop.mockReset();
   mockClearLastStop.mockResolvedValue(undefined);
+  mockMarkLastStopAcknowledged.mockReset();
+  mockMarkLastStopAcknowledged.mockResolvedValue(undefined);
   mockIsHumanCaller.mockReset();
   mockIsHumanCaller.mockReturnValue(true);
 });
@@ -1644,6 +1649,7 @@ describe("start command — orchestrator session strategy display", () => {
     await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
 
     expect(mockClearLastStop).not.toHaveBeenCalled();
+    expect(mockMarkLastStopAcknowledged).not.toHaveBeenCalled();
     expect(mockWriteLastStop).toHaveBeenCalledTimes(1);
     const written = mockWriteLastStop.mock.calls[0][0];
     expect(written.sessionIds).toEqual(["app-2"]);
@@ -1651,7 +1657,11 @@ describe("start command — orchestrator session strategy display", () => {
     expect(written.stoppedAt).toBe("2026-04-28T10:00:00.000Z");
   });
 
-  it("clears last-stop record when every session restored successfully", async () => {
+  // After every session restores successfully, the record is acknowledged
+  // (not unlinked) so a subsequent `ao start` within the fallback's
+  // 10-minute window does not re-surface the same sessions through the
+  // fallback scan. See Greptile P1 on PR #1780.
+  it("acknowledges last-stop record (does not unlink) when every session restored successfully", async () => {
     mockReadLastStop.mockResolvedValue({
       stoppedAt: "2026-04-28T10:00:00.000Z",
       projectId: "my-app",
@@ -1671,7 +1681,74 @@ describe("start command — orchestrator session strategy display", () => {
     await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
 
     expect(mockWriteLastStop).not.toHaveBeenCalled();
-    expect(mockClearLastStop).toHaveBeenCalled();
+    expect(mockClearLastStop).not.toHaveBeenCalled();
+    expect(mockMarkLastStopAcknowledged).toHaveBeenCalledWith("my-app");
+  });
+
+  // Greptile P1 regression on PR #1780: after the user declines a
+  // restore, the next `ao start` within the fallback's 10-minute window
+  // must NOT re-prompt with the same sessions. The fix writes an empty
+  // marker on decline so readLastStop returns a non-null record and the
+  // fallback gate (`!lastStop`) stays closed.
+  it("does not re-prompt with fallback after user declines (PR #1780)", async () => {
+    const origGlobalEnv = process.env["AO_GLOBAL_CONFIG"];
+    process.env["AO_GLOBAL_CONFIG"] = join(tmpDir, "no-such-global.yaml");
+
+    try {
+      // The acknowledged marker that the prior `ao start` would have
+      // written when the user declined: non-null, empty sessionIds.
+      mockReadLastStop.mockResolvedValue({
+        stoppedAt: new Date(Date.now() - 30_000).toISOString(),
+        projectId: "my-app",
+        sessionIds: [],
+      });
+
+      mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+      const { findWebDir } = await import("../../src/lib/web-dir.js");
+      vi.mocked(findWebDir).mockReturnValue(tmpDir);
+      writeFileSync(join(tmpDir, "package.json"), "{}");
+
+      const fakeDashboard = { on: vi.fn(), kill: vi.fn(), emit: vi.fn() };
+      mockSpawn.mockReturnValue(fakeDashboard);
+
+      // The sessions are still in `manually_killed` state in the SM.
+      // Pre-fix, the fallback would surface them again. Post-fix, the
+      // fallback must not even be consulted (the empty marker keeps the
+      // gate closed).
+      const recentTerminatedAt = new Date(Date.now() - 60_000).toISOString();
+      mockSessionManager.list.mockResolvedValue([
+        {
+          id: "app-1",
+          projectId: "my-app",
+          status: "killed",
+          activity: "exited",
+          metadata: {},
+          lastActivityAt: new Date(),
+          lifecycle: {
+            version: 2,
+            session: {
+              kind: "worker",
+              state: "terminated",
+              reason: "manually_killed",
+              startedAt: null,
+              completedAt: null,
+              terminatedAt: recentTerminatedAt,
+              lastTransitionAt: recentTerminatedAt,
+            },
+            pr: { state: "none", reason: "not_created", number: null, url: null, lastObservedAt: null },
+            runtime: { state: "missing", reason: "manual_kill_requested", lastObservedAt: null, handle: null, tmuxName: null },
+          },
+        },
+      ]);
+
+      await program.parseAsync(["node", "test", "start", "--no-orchestrator"]);
+
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+      expect(mockSessionManager.restore).not.toHaveBeenCalled();
+    } finally {
+      if (origGlobalEnv === undefined) delete process.env["AO_GLOBAL_CONFIG"];
+      else process.env["AO_GLOBAL_CONFIG"] = origGlobalEnv;
+    }
   });
 
   // Regression for issue #1743: when last-stop.json is missing or empty

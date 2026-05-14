@@ -73,7 +73,7 @@ import {
   acquireStartupLock,
   writeLastStop,
   readLastStop,
-  clearLastStop,
+  markLastStopAcknowledged,
   type RunningState,
 } from "../lib/running-state.js";
 import { attachToDaemon, killExistingDaemon } from "../lib/daemon.js";
@@ -969,17 +969,20 @@ async function runStartup(
   }
 
   // Check for sessions from last `ao stop` and offer to restore them.
-  // If `last-stop.json` is missing or empty (which can happen if the
-  // record never made it to disk — see issue #1743), fall back to a
-  // scan of recently `manually_killed` sessions so the restore prompt
-  // still fires.
+  // If `last-stop.json` is missing (which can happen if the record never
+  // made it to disk — see issue #1743), fall back to a scan of recently
+  // `manually_killed` sessions so the restore prompt still fires.
+  //
+  // The fallback gate is intentionally `!lastStop` (file absent), not
+  // "has no content". After any user decision (decline / all restored)
+  // we rewrite the file as an empty sentinel below — that keeps the
+  // file present so a second `ao start` within the 10-minute window
+  // doesn't replay the fallback and re-prompt for sessions the user
+  // just declined.
   if (isHumanCaller()) {
     try {
       let lastStop = await readLastStop();
-      const lastStopHasContent =
-        !!lastStop &&
-        (lastStop.sessionIds.length > 0 || (lastStop.otherProjects ?? []).length > 0);
-      if (!lastStopHasContent) {
+      if (!lastStop) {
         // Use the global config so `sm.list()` sees sessions from every
         // registered project. The project-scoped `config` only sees the
         // current project's sessions, which would silently drop the
@@ -1103,17 +1106,20 @@ async function runStartup(
                   ),
                 );
               } else {
-                await clearLastStop();
+                await markLastStopAcknowledged(lastStop.projectId);
               }
             } else {
-              await clearLastStop();
+              await markLastStopAcknowledged(lastStop.projectId);
             }
           } else {
-            // User declined restore — clear the record.
-            await clearLastStop();
+            // User declined restore — write an empty marker so the
+            // fallback doesn't surface these same sessions on the next
+            // `ao start` within the 10-minute window. See Greptile P1
+            // review on PR #1780.
+            await markLastStopAcknowledged(lastStop.projectId);
           }
         } else {
-          await clearLastStop();
+          await markLastStopAcknowledged(lastStop.projectId);
         }
       }
     } catch {

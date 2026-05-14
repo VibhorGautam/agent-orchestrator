@@ -145,6 +145,25 @@ describe("running-state", () => {
     });
   });
 
+  // Greptile P1 on PR #1780: after the user decides on a previous stop,
+  // we leave an empty marker on disk so the fallback in `ao start` doesn't
+  // surface the same sessions on the next invocation.
+  it("markLastStopAcknowledged writes a present but empty marker readable by readLastStop", async () => {
+    const runningState = await import("../../src/lib/running-state.js");
+
+    await runningState.markLastStopAcknowledged("my-app");
+
+    const lastStopFile = join(testHome, ".agent-orchestrator", "last-stop.json");
+    expect(existsSync(lastStopFile)).toBe(true);
+
+    const read = await runningState.readLastStop();
+    expect(read).not.toBeNull();
+    expect(read?.projectId).toBe("my-app");
+    expect(read?.sessionIds).toEqual([]);
+    expect(read?.otherProjects).toBeUndefined();
+    expect(typeof read?.stoppedAt).toBe("string");
+  });
+
   it("keeps startup locks alive when the pid probe returns EPERM", async () => {
     const runningState = await import("../../src/lib/running-state.js");
     const lockDir = join(testHome, ".agent-orchestrator");

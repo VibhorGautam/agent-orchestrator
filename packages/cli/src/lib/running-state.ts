@@ -364,3 +364,20 @@ export async function clearLastStop(): Promise<void> {
     release();
   }
 }
+
+/**
+ * Write an empty `last-stop.json` to record that the user has already
+ * seen / decided on the previous stop. We leave the file on disk
+ * (rather than unlinking it) so `ao start`'s fallback scan does not
+ * re-surface the same recently-killed sessions on the next invocation
+ * within the 10-minute window. Without this, declining a restore and
+ * then re-running `ao start` would re-prompt for the same sessions —
+ * see Greptile P1 review on PR #1780 (issue #1743 follow-up).
+ */
+export async function markLastStopAcknowledged(projectId: string): Promise<void> {
+  await writeLastStop({
+    stoppedAt: new Date().toISOString(),
+    projectId,
+    sessionIds: [],
+  });
+}
