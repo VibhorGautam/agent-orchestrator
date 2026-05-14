@@ -147,7 +147,7 @@ describe("daemon child registry", () => {
 describe("AO orphan detection", () => {
   it("detects PPID=1 AO dashboard, websocket, and lifecycle processes", () => {
     const output = [
-      "  90350      1 node next-server (v15.5.15)",
+      "  90350      1 node /opt/homebrew/lib/node_modules/@aoagents/ao-web/node_modules/next/dist/server/next-server.js",
       "  90351      1 node /opt/homebrew/lib/node_modules/@aoagents/ao-web/dist-server/start-all.js",
       "  47457      1 node /opt/homebrew/lib/node_modules/@aoagents/ao-web@0.2.4/dist-server/start-all.js",
       "  47458      1 node @aoagents/ao-web@0.2.4 dist-server/start-all.js",
@@ -155,6 +155,7 @@ describe("AO orphan detection", () => {
       "  47580      1 node /opt/homebrew/lib/node_modules/@aoagents/ao-web@0.2.4/dist-server/direct-terminal-ws.js",
       "   9914      1 node /opt/homebrew/bin/ao lifecycle-worker codex-startup-factory",
       "  22222   3333 node /opt/homebrew/bin/ao lifecycle-worker not-an-orphan",
+      "  33333      1 node next-server (v15.5.15)",
       "  44444      1 node unrelated-server.js",
     ].join("\n");
 
