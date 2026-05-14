@@ -422,10 +422,7 @@ export function classifyAoOrphanCommand(command: string): string | null {
   ) {
     return "lifecycle-worker";
   }
-  if (
-    normalized.includes("next-server") &&
-    (normalized.includes("@aoagents") || normalized.includes("ao-web"))
-  ) {
+  if (normalized.includes("next-server") && normalized.includes("@aoagents")) {
     return "next-server";
   }
   return null;
