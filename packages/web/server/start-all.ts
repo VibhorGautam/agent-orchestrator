@@ -48,9 +48,9 @@ export function getShutdownGraceMs(
   const raw = env["AO_SHUTDOWN_GRACE_MS"];
   if (!raw) return DEFAULT_SHUTDOWN_GRACE_MS;
 
-  const parsed = Number(raw);
+  const parsed = Math.floor(Number(raw));
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SHUTDOWN_GRACE_MS;
-  return Math.floor(parsed);
+  return parsed;
 }
 
 export function formatCleanShutdownMessage(elapsedMs: number): string {

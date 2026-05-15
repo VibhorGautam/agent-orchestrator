@@ -122,15 +122,12 @@ export function createDirectTerminalServer(tmuxPath?: string | null): DirectTerm
         for (const client of muxWss.clients) {
           client.close(1001, "server shutting down");
         }
-        const terminateTimer = setTimeout(
-          () => {
-            if (!muxWss) return;
-            for (const client of muxWss.clients) {
-              client.terminate();
-            }
-          },
-          Math.max(100, drainMs),
-        );
+        const terminateTimer = setTimeout(() => {
+          if (!muxWss) return;
+          for (const client of muxWss.clients) {
+            client.terminate();
+          }
+        }, 200);
         terminateTimer.unref();
         muxWss.close();
       }
