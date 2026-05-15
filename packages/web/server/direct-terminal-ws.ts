@@ -4,13 +4,51 @@
  */
 
 import { createServer, type Server } from "node:http";
-import type { WebSocketServer } from "ws";
+import { isWindows } from "@aoagents/ao-core";
 import { findTmux } from "./tmux-utils.js";
-import { createMuxWebSocket } from "./mux-websocket.js";
+import {
+  createMuxWebSocket,
+  PTY_SHUTDOWN_DRAIN_MS,
+  type MuxWebSocketServer,
+} from "./mux-websocket.js";
 
 export interface DirectTerminalServer {
   server: Server;
-  shutdown: () => void;
+  shutdown: (opts?: { drainMs?: number }) => void;
+}
+
+export function createDirectTerminalShutdownHandler(
+  shutdown: () => void | Promise<void>,
+  opts: {
+    log?: (message: string) => void;
+    warn?: (message: string) => void;
+    exit?: (code: number) => never | void;
+    forceTimeoutMs?: number;
+  } = {},
+): (signal: string) => void {
+  const log = opts.log ?? console.log;
+  const warn = opts.warn ?? console.warn;
+  const exit = opts.exit ?? process.exit;
+  const forceTimeoutMs = opts.forceTimeoutMs ?? 5_000;
+  let shuttingDown = false;
+
+  return (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    log(`[DirectTerminal] Received ${signal}, shutting down...`);
+    void Promise.resolve(shutdown());
+
+    if (forceTimeoutMs > 0) {
+      const forceExitTimer = setTimeout(() => {
+        warn(
+          `[DirectTerminal] warn: forced shutdown after ${forceTimeoutMs}ms (safety fallback, no orphans leaked)`,
+        );
+        exit(0);
+      }, forceTimeoutMs);
+      forceExitTimer.unref();
+    }
+  };
 }
 
 /**
@@ -20,7 +58,7 @@ export interface DirectTerminalServer {
 export function createDirectTerminalServer(tmuxPath?: string | null): DirectTerminalServer {
   const TMUX = tmuxPath ?? findTmux();
 
-  let muxWss: WebSocketServer | null = null;
+  let muxWss: MuxWebSocketServer | null = null;
 
   const metrics = {
     totalConnections: 0,
@@ -64,25 +102,40 @@ export function createDirectTerminalServer(tmuxPath?: string | null): DirectTerm
   server.on("upgrade", (request, socket, head) => {
     const pathname = new URL(request.url ?? "/", "ws://localhost").pathname;
 
-    if (pathname === "/mux" && muxWss) {
-      muxWss.handleUpgrade(request, socket, head, (ws) => {
-        muxWss!.emit("connection", ws, request);
+    const mux = muxWss;
+    if (pathname === "/mux" && mux) {
+      mux.handleUpgrade(request, socket, head, (ws) => {
+        mux.emit("connection", ws, request);
       });
     } else {
       socket.destroy();
     }
   });
 
-  function shutdown() {
-    // Terminate all connected mux clients — this triggers their 'close' events
-    // which unsubscribe terminal callbacks and kill PTY processes.
-    if (muxWss) {
-      for (const client of muxWss.clients) {
-        client.terminate();
+  function shutdown(opts: { drainMs?: number } = {}) {
+    const drainMs = opts.drainMs ?? 0;
+    void (async () => {
+      await muxWss?.shutdownGracefully?.(drainMs);
+      if (muxWss) {
+        // Send a normal close frame first so browsers receive any final PTY
+        // exit messages. After the PTY drain window, terminate stragglers.
+        for (const client of muxWss.clients) {
+          client.close(1001, "server shutting down");
+        }
+        const terminateTimer = setTimeout(
+          () => {
+            if (!muxWss) return;
+            for (const client of muxWss.clients) {
+              client.terminate();
+            }
+          },
+          Math.max(100, drainMs),
+        );
+        terminateTimer.unref();
+        muxWss.close();
       }
-      muxWss.close();
-    }
-    server.close();
+      server.close();
+    })();
   }
 
   return { server, shutdown };
@@ -102,7 +155,7 @@ if (isMainModule) {
   const TMUX = findTmux();
   if (TMUX) {
     console.log(`[DirectTerminal] Using tmux: ${TMUX}`);
-  } else if (process.platform === "win32") {
+  } else if (isWindows()) {
     console.log(`[DirectTerminal] Windows mode — using named pipe relay to PTY hosts`);
   } else {
     console.log(`[DirectTerminal] No tmux available — terminal relay may be limited`);
@@ -114,15 +167,10 @@ if (isMainModule) {
     console.log(`[DirectTerminal] WebSocket server listening on port ${PORT}`);
   });
 
-  function handleShutdown(signal: string) {
-    console.log(`[DirectTerminal] Received ${signal}, shutting down...`);
-    shutdown();
-    const forceExitTimer = setTimeout(() => {
-      console.error("[DirectTerminal] Forced shutdown after timeout");
-      process.exit(1);
-    }, 5000);
-    forceExitTimer.unref();
-  }
+  const handleShutdown = createDirectTerminalShutdownHandler(
+    () => shutdown({ drainMs: PTY_SHUTDOWN_DRAIN_MS }),
+    { forceTimeoutMs: 15_000 },
+  );
 
   process.on("SIGINT", () => handleShutdown("SIGINT"));
   process.on("SIGTERM", () => handleShutdown("SIGTERM"));

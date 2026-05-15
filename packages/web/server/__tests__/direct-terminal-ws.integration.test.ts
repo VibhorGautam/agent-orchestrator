@@ -7,12 +7,16 @@
  * response, mirroring what the browser's MuxProvider does.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { request, type IncomingMessage } from "node:http";
 import { WebSocket } from "ws";
 import { findTmux } from "../tmux-utils.js";
-import { createDirectTerminalServer, type DirectTerminalServer } from "../direct-terminal-ws.js";
+import {
+  createDirectTerminalServer,
+  createDirectTerminalShutdownHandler,
+  type DirectTerminalServer,
+} from "../direct-terminal-ws.js";
 
 const TMUX = findTmux();
 const TEST_SESSION = `ao-test-integration-${process.pid}`;
@@ -24,6 +28,31 @@ const describeWithTmux = TMUX ? describe : describe.skip;
 
 let terminal: DirectTerminalServer;
 let port: number;
+
+describe("direct terminal shutdown handler", () => {
+  it("runs shutdown only once when duplicate SIGTERM/SIGINT signals arrive", () => {
+    const shutdown = vi.fn();
+    const log = vi.fn();
+    const warn = vi.fn();
+    const exit = vi.fn();
+    const handleShutdown = createDirectTerminalShutdownHandler(shutdown, {
+      log,
+      warn,
+      exit,
+      forceTimeoutMs: 0,
+    });
+
+    handleShutdown("SIGTERM");
+    handleShutdown("SIGTERM");
+    handleShutdown("SIGINT");
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith("[DirectTerminal] Received SIGTERM, shutting down...");
+    expect(warn).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+});
 
 // =============================================================================
 // Helpers

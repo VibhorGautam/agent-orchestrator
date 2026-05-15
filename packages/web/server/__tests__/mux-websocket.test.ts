@@ -236,6 +236,30 @@ describe("SessionBroadcaster", () => {
 
       expect(callback).not.toHaveBeenCalled();
     });
+
+    it("suppresses abort warnings when shutdown aborts an in-flight fetch", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let rejectFetch: ((err: Error) => void) | undefined;
+      mockFetch.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFetch = reject;
+          }),
+      );
+
+      const callback = vi.fn();
+      broadcaster.subscribe(callback);
+      broadcaster.shutdown();
+      rejectFetch?.(new Error("This operation was aborted"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        "[SessionBroadcaster] fetchSnapshot error:",
+        "This operation was aborted",
+      );
+      warnSpy.mockRestore();
+    });
   });
 
   describe("disconnect", () => {
@@ -370,5 +394,75 @@ describe("TerminalManager.open — re-attach skipped when tmux session is gone (
     // Re-attach happened: ptySpawn called a second time, exit not yet notified.
     expect(mockPtySpawn).toHaveBeenCalledTimes(2);
     expect(exitCb).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalManager shutdown", () => {
+  let capturedOnExit: ((evt: { exitCode: number }) => Promise<void> | void) | undefined;
+  let pty: {
+    onData: ReturnType<typeof vi.fn>;
+    onExit: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+    resize: ReturnType<typeof vi.fn>;
+    kill: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSpawn.mockReset();
+    mockPtySpawn.mockReset();
+    mockTmuxHasSession.mockReset();
+    capturedOnExit = undefined;
+
+    mockSpawn.mockImplementation(() => new EventEmitter());
+    pty = {
+      onData: vi.fn(),
+      onExit: vi.fn((cb: (evt: { exitCode: number }) => Promise<void> | void) => {
+        capturedOnExit = cb;
+      }),
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+    };
+    mockPtySpawn.mockReturnValue(pty);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("detaches PTYs, lets them drain, and reports normal exit code 0 without re-attaching", async () => {
+    const mgr = new TerminalManager("/usr/bin/tmux");
+    const exitCb = vi.fn();
+    mgr.subscribe("ao-177", undefined, vi.fn(), exitCb);
+
+    const shutdownPromise = mgr.shutdownGracefully(1000);
+    expect(pty.write).toHaveBeenCalledWith("\x02d");
+
+    await capturedOnExit!({ exitCode: 0 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await shutdownPromise;
+
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(mockTmuxHasSession).not.toHaveBeenCalled();
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+    expect(exitCb).toHaveBeenCalledWith(0);
+  });
+
+  it("does not hard-kill PTYs when WebSocket subscribers close during the drain window", async () => {
+    const mgr = new TerminalManager("/usr/bin/tmux");
+    const unsubscribe = mgr.subscribe("ao-177", undefined, vi.fn(), vi.fn());
+
+    const shutdownPromise = mgr.shutdownGracefully(1000);
+    unsubscribe();
+
+    expect(pty.write).toHaveBeenCalledWith("\x02d");
+    expect(pty.kill).not.toHaveBeenCalled();
+
+    await capturedOnExit!({ exitCode: 0 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await shutdownPromise;
+    expect(pty.kill).not.toHaveBeenCalled();
   });
 });

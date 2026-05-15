@@ -114,12 +114,20 @@ describe.skipIf(!canRun)("daemon child reaping (integration)", () => {
       AO_CALLER_TYPE: "agent",
       AO_CONFIG_PATH: configPath,
       AO_GLOBAL_CONFIG: configPath,
+      AO_SHUTDOWN_GRACE_MS: "15000",
       PORT: String(port),
     };
     const start = spawn(tsxBin, [cliEntry, "start", "--no-orchestrator", "--reap-orphans"], {
       cwd: repoPath,
       env,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let startOutput = "";
+    start.stdout?.on("data", (chunk: Buffer) => {
+      startOutput += chunk.toString();
+    });
+    start.stderr?.on("data", (chunk: Buffer) => {
+      startOutput += chunk.toString();
     });
     startPid = start.pid;
     expect(startPid).toBeTypeOf("number");
@@ -139,11 +147,16 @@ describe.skipIf(!canRun)("daemon child reaping (integration)", () => {
     const childPids = await readChildPids(runningPid!);
     expect(childPids.length).toBeGreaterThan(0);
 
-    await execFileAsync(tsxBin, [cliEntry, "stop", "--all"], { cwd: repoPath, env, timeout: 20_000 });
+    await execFileAsync(tsxBin, [cliEntry, "stop", "--all"], {
+      cwd: repoPath,
+      env,
+      timeout: 20_000,
+    });
     await sleep(5_000);
 
     const stillAlive = childPids.filter(isAlive);
     expect(stillAlive).toEqual([]);
     expect(isAlive(runningPid!)).toBe(false);
+    expect(startOutput).not.toMatch(/exited with code 1/);
   }, 60_000);
 });
