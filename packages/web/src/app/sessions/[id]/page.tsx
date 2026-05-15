@@ -204,7 +204,7 @@ function SessionPageShell({
   sidebarSessions: DashboardSession[] | null;
   sidebarOrchestrators?: ProjectSidebarOrchestrator[];
   sidebarLoading: boolean;
-  sidebarError: boolean;
+  sidebarError: string | null;
   onRetrySidebar: () => void;
   activeProjectId?: string;
   activeSessionId?: string;
@@ -214,8 +214,8 @@ function SessionPageShell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const hasCachedSidebarSessions = (sidebarSessions?.length ?? 0) > 0;
-  const sidebarFirstLoadFailed = sidebarError && !hasCachedSidebarSessions;
-  const sidebarRefreshFailed = sidebarError && hasCachedSidebarSessions;
+  const sidebarFirstLoadError = !hasCachedSidebarSessions ? sidebarError : null;
+  const sidebarRefreshError = hasCachedSidebarSessions ? sidebarError : null;
 
   const handleToggleSidebar = useCallback(() => {
     if (isMobile) {
@@ -279,8 +279,8 @@ function SessionPageShell({
               sessions={sidebarSessions}
               orchestrators={sidebarOrchestrators}
               loading={sidebarLoading}
-              firstLoadFailed={sidebarFirstLoadFailed}
-              refreshFailed={sidebarRefreshFailed}
+              firstLoadError={sidebarFirstLoadError}
+              refreshError={sidebarRefreshError}
               onRetry={onRetrySidebar}
               activeProjectId={activeProjectId}
               activeSessionId={activeSessionId}
@@ -414,7 +414,7 @@ export default function SessionPage() {
   const [loading, setLoading] = useState(cachedSession === null);
   const [routeError, setRouteError] = useState<Error | null>(null);
   const [sessionMissing, setSessionMissing] = useState(false);
-  const [sidebarError, setSidebarError] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [prefixByProject, setPrefixByProject] = useState<Map<string, string>>(new Map());
   const sessionProjectId = session?.projectId ?? null;
   const allPrefixes = [...prefixByProject.values()];
@@ -693,7 +693,7 @@ export default function SessionPage() {
         applyMuxSessionPatches(restSessions, pendingMuxSessionsRef.current ?? []) ?? restSessions;
       cachedSidebarSessions = nextSessions;
       setSidebarOrchestrators(body?.orchestrators);
-      setSidebarError(false);
+      setSidebarError(null);
       setSidebarSessions((current) =>
         areSidebarSessionsEqual(current, nextSessions) ? current : nextSessions,
       );
@@ -702,7 +702,7 @@ export default function SessionPage() {
         return;
       }
       console.error("Failed to fetch sidebar sessions:", err);
-      setSidebarError(true);
+      setSidebarError(err instanceof Error ? err.message : String(err));
       setSidebarSessions((current) => (current === null ? [] : current));
     } finally {
       fetchingSidebarRef.current = false;
@@ -943,7 +943,6 @@ export default function SessionPage() {
       sidebarOrchestrators={sidebarOrchestrators}
       sidebarLoading={sidebarSessions === null}
       sidebarError={sidebarError}
-      sidebarRefreshFailed={sidebarError && (sidebarSessions?.length ?? 0) > 0}
       onRetrySidebar={fetchSidebarSessions}
     />
   );

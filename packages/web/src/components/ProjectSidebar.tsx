@@ -33,8 +33,8 @@ interface ProjectSidebarProps {
   activeProjectId: string | undefined;
   activeSessionId: string | undefined;
   loading?: boolean;
-  firstLoadFailed?: boolean;
-  refreshFailed?: boolean;
+  firstLoadError?: string | null;
+  refreshError?: string | null;
   onRetry?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -156,8 +156,8 @@ function ProjectSidebarInner({
   activeProjectId,
   activeSessionId,
   loading = false,
-  firstLoadFailed = false,
-  refreshFailed = false,
+  firstLoadError = null,
+  refreshError = null,
   onRetry,
   collapsed = false,
   onToggleCollapsed: _onToggleCollapsed,
@@ -525,12 +525,17 @@ function ProjectSidebarInner({
 
       {/* Stale-data banner: keep cached sessions visible on fetch failure but
             surface the error so users know the list may be out of date. */}
-      {refreshFailed && sessions && sessions.length > 0 ? (
+      {refreshError && sessions && sessions.length > 0 ? (
         <div
           role="status"
-          className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
+          className="mx-3 mb-2 flex items-start justify-between gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
         >
-          <span>Failed to refresh · showing cached sessions</span>
+          <span className="min-w-0">
+            <span className="block">Failed to refresh · showing cached sessions</span>
+            <span className="block truncate" title={refreshError}>
+              {refreshError}
+            </span>
+          </span>
           {onRetry ? (
             <button
               type="button"
@@ -912,9 +917,15 @@ function ProjectSidebarInner({
                         </div>
                       );
                     })
-                  ) : firstLoadFailed ? (
+                  ) : firstLoadError ? (
                     <div className="px-3 py-2">
                       <div className="project-sidebar__empty">Failed to load sessions</div>
+                      <div
+                        className="mt-1 break-words text-xs text-[var(--color-text-tertiary)]"
+                        title={firstLoadError}
+                      >
+                        {firstLoadError}
+                      </div>
                       <button
                         type="button"
                         className="mt-2 text-xs font-medium text-[var(--color-link)] hover:underline"

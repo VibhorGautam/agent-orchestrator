@@ -690,15 +690,13 @@ describe("SessionPage project polling", () => {
     await flushAsyncWork();
 
     const latestProps = sessionDetailSpy.mock.lastCall?.[0] as {
-      sidebarError?: boolean;
-      sidebarRefreshFailed?: boolean;
+      sidebarError?: string | null;
       sidebarLoading?: boolean;
       sidebarSessions?: DashboardSession[] | null;
     };
 
     expect(latestProps.sidebarLoading).toBe(false);
-    expect(latestProps.sidebarError).toBe(true);
-    expect(latestProps.sidebarRefreshFailed).toBe(false);
+    expect(latestProps.sidebarError).toBe("HTTP 500");
     expect(latestProps.sidebarSessions).toEqual([]);
   });
 
@@ -753,12 +751,10 @@ describe("SessionPage project polling", () => {
 
     let latestProps = sessionDetailSpy.mock.lastCall?.[0] as {
       onRetrySidebar?: () => Promise<void>;
-      sidebarError?: boolean;
-      sidebarRefreshFailed?: boolean;
+      sidebarError?: string | null;
       sidebarSessions?: DashboardSession[] | null;
     };
-    expect(latestProps.sidebarError).toBe(false);
-    expect(latestProps.sidebarRefreshFailed).toBe(false);
+    expect(latestProps.sidebarError).toBeNull();
     expect(latestProps.sidebarSessions).toEqual(sidebarSessions);
 
     failSidebar = true;
@@ -768,8 +764,7 @@ describe("SessionPage project polling", () => {
     await flushAsyncWork();
 
     latestProps = sessionDetailSpy.mock.lastCall?.[0] as typeof latestProps;
-    expect(latestProps.sidebarError).toBe(true);
-    expect(latestProps.sidebarRefreshFailed).toBe(true);
+    expect(latestProps.sidebarError).toBe("HTTP 500");
     expect(latestProps.sidebarSessions).toEqual(sidebarSessions);
   });
 

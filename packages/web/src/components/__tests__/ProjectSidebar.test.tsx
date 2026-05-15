@@ -130,12 +130,13 @@ describe("ProjectSidebar", () => {
         sessions={[]}
         activeProjectId="project-1"
         activeSessionId={undefined}
-        firstLoadFailed
+        firstLoadError="HTTP 500"
         onRetry={vi.fn()}
       />,
     );
 
     expect(screen.getByText("Failed to load sessions")).toBeInTheDocument();
+    expect(screen.getByText("HTTP 500")).toBeInTheDocument();
     expect(
       screen.queryByText("Failed to refresh · showing cached sessions"),
     ).not.toBeInTheDocument();
@@ -154,11 +155,12 @@ describe("ProjectSidebar", () => {
         ]}
         activeProjectId="project-1"
         activeSessionId={undefined}
-        refreshFailed
+        refreshError="GitHub API rate limited"
       />,
     );
 
     expect(screen.getByText("Failed to refresh · showing cached sessions")).toBeInTheDocument();
+    expect(screen.getByText("GitHub API rate limited")).toBeInTheDocument();
     expect(screen.queryByText("Failed to load sessions")).not.toBeInTheDocument();
     expect(screen.getByText("feat/cached")).toBeInTheDocument();
   });

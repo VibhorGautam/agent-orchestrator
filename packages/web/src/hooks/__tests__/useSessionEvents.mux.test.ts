@@ -125,6 +125,8 @@ describe("useSessionEvents - mux", () => {
     });
     expect(result.current.firstLoadFailed).toBe(false);
     expect(result.current.loadError).toBeNull();
+    expect(result.current.firstLoadError).toBeNull();
+    expect(result.current.refreshError).toBe("mux exploded");
   });
 
   it("marks mux errors as first-load failures when no sessions have resolved", async () => {
@@ -142,6 +144,8 @@ describe("useSessionEvents - mux", () => {
     });
     expect(result.current.refreshFailed).toBe(false);
     expect(result.current.loadError).toBe("mux exploded");
+    expect(result.current.firstLoadError).toBe("mux exploded");
+    expect(result.current.refreshError).toBeNull();
   });
 
   it("clears refresh failures on the next successful mux snapshot", async () => {
@@ -182,6 +186,8 @@ describe("useSessionEvents - mux", () => {
     });
     expect(result.current.firstLoadFailed).toBe(false);
     expect(result.current.loadError).toBeNull();
+    expect(result.current.firstLoadError).toBeNull();
+    expect(result.current.refreshError).toBeNull();
   });
 
   it("marks HTTP refresh errors as refresh failures", async () => {
@@ -229,6 +235,7 @@ describe("useSessionEvents - mux", () => {
 
     expect(result.current.refreshFailed).toBe(true);
     expect(result.current.firstLoadFailed).toBe(false);
+    expect(result.current.refreshError).toBe("refresh exploded");
     expect(warnSpy).toHaveBeenCalledWith("[useSessionEvents] refresh failed:", expect.any(Error));
   });
 });

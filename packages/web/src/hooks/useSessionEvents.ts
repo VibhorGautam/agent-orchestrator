@@ -86,8 +86,12 @@ interface State {
   loadError: string | null;
   /** True when no session data has ever resolved and the live transport reports an error. */
   firstLoadFailed: boolean;
+  /** First-load error message alias used by sidebar consumers. */
+  firstLoadError: string | null;
   /** True when a refresh fails after cached/resolved session data is available. */
   refreshFailed: boolean;
+  /** Refresh error message shown with stale cached data. */
+  refreshError: string | null;
 }
 
 type Action =
@@ -99,22 +103,33 @@ type Action =
     }
   | { type: "snapshot"; patches: SessionPatch[] }
   | { type: "muxError"; error: string }
-  | { type: "refreshError" }
+  | { type: "refreshError"; error: string }
   | { type: "clearErrors" };
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "muxError": {
       const hasResolvedData = state.liveSessionsResolved || state.sessions.length > 0;
       if (hasResolvedData) {
-        if (state.refreshFailed && !state.firstLoadFailed && state.loadError === null) {
+        if (
+          state.refreshFailed &&
+          !state.firstLoadFailed &&
+          state.loadError === null &&
+          state.refreshError === action.error
+        ) {
           return state;
         }
         return {
           ...state,
           loadError: null,
+          firstLoadError: null,
           firstLoadFailed: false,
           refreshFailed: true,
+          refreshError: action.error,
         };
       }
 
@@ -126,20 +141,52 @@ function reducer(state: State, action: Action): State {
         ...state,
         loadError: action.error,
         firstLoadFailed: true,
+        firstLoadError: action.error,
         refreshFailed: false,
+        refreshError: null,
       };
     }
-    case "refreshError":
-      return state.refreshFailed ? state : { ...state, refreshFailed: true };
+    case "refreshError": {
+      const hasResolvedData = state.liveSessionsResolved || state.sessions.length > 0;
+      if (!hasResolvedData) {
+        return {
+          ...state,
+          loadError: action.error,
+          firstLoadError: action.error,
+          firstLoadFailed: true,
+          refreshFailed: false,
+          refreshError: null,
+        };
+      }
+
+      return state.refreshFailed && state.refreshError === action.error
+        ? state
+        : {
+            ...state,
+            loadError: null,
+            firstLoadError: null,
+            firstLoadFailed: false,
+            refreshFailed: true,
+            refreshError: action.error,
+          };
+    }
     case "clearErrors":
-      if (!state.firstLoadFailed && !state.refreshFailed && state.loadError === null) {
+      if (
+        !state.firstLoadFailed &&
+        !state.refreshFailed &&
+        state.loadError === null &&
+        state.firstLoadError === null &&
+        state.refreshError === null
+      ) {
         return state;
       }
       return {
         ...state,
         loadError: null,
+        firstLoadError: null,
         firstLoadFailed: false,
         refreshFailed: false,
+        refreshError: null,
       };
     case "reset":
       return {
@@ -149,8 +196,10 @@ function reducer(state: State, action: Action): State {
           ? {
               liveSessionsResolved: true,
               loadError: null,
+              firstLoadError: null,
               firstLoadFailed: false,
               refreshFailed: false,
+              refreshError: null,
             }
           : {}),
         ...(action.attentionLevels !== undefined
@@ -204,7 +253,9 @@ function reducer(state: State, action: Action): State {
           state.liveSessionsResolved &&
           !state.firstLoadFailed &&
           !state.refreshFailed &&
-          state.loadError === null
+          state.loadError === null &&
+          state.firstLoadError === null &&
+          state.refreshError === null
         ) {
           return state;
         }
@@ -212,8 +263,10 @@ function reducer(state: State, action: Action): State {
           ...state,
           liveSessionsResolved: true,
           loadError: null,
+          firstLoadError: null,
           firstLoadFailed: false,
           refreshFailed: false,
+          refreshError: null,
         };
       }
 
@@ -223,8 +276,10 @@ function reducer(state: State, action: Action): State {
         attentionLevels: levelsChanged ? levels : state.attentionLevels,
         liveSessionsResolved: true,
         loadError: null,
+        firstLoadError: null,
         firstLoadFailed: false,
         refreshFailed: false,
+        refreshError: null,
       };
     }
   }
@@ -270,8 +325,10 @@ export function useSessionEvents(options: UseSessionEventsOptions): State {
     attentionLevels: initialAttentionLevels ?? ({} as AttentionMap),
     liveSessionsResolved: false,
     loadError: null,
+    firstLoadError: null,
     firstLoadFailed: false,
     refreshFailed: false,
+    refreshError: null,
   });
   const sessionsRef = useRef(state.sessions);
   const initialAttentionLevelsRef = useRef(initialAttentionLevels);
@@ -365,7 +422,7 @@ export function useSessionEvents(options: UseSessionEventsOptions): State {
           if (pageUnloadingRef.current || refreshController.signal.aborted || isAbortLikeError(err))
             return;
           console.warn("[useSessionEvents] refresh failed:", err);
-          dispatch({ type: "refreshError" });
+          dispatch({ type: "refreshError", error: getErrorMessage(err) });
           // Update timestamp on failure to prevent retry loops
           lastRefreshAtRef.current = Date.now();
         })

@@ -166,8 +166,8 @@ function DashboardInner({
     attentionLevels,
     liveSessionsResolved,
     loadError,
-    firstLoadFailed,
-    refreshFailed,
+    firstLoadError,
+    refreshError,
   } = useSessionEvents({
     initialSessions,
     // No project filter — sidebar needs all sessions across all projects.
@@ -192,7 +192,8 @@ function DashboardInner({
   const ssrLoadError = recoveredFromLoadError ? undefined : dashboardLoadError;
   // Live WS error takes precedence; fall back to SSR load error when live data hasn't resolved it.
   const visibleLoadError = loadError ?? ssrLoadError;
-  const sidebarFirstLoadFailed = firstLoadFailed || Boolean(ssrLoadError && sessions.length === 0);
+  const sidebarFirstLoadError =
+    firstLoadError ?? (ssrLoadError && sessions.length === 0 ? ssrLoadError : null);
   const searchParams = useSearchParams();
   const router = useRouter();
   const routerRef = useRef(router);
@@ -651,8 +652,8 @@ function DashboardInner({
                 orchestrators={activeOrchestrators}
                 activeProjectId={projectId}
                 activeSessionId={activeSessionId}
-                firstLoadFailed={sidebarFirstLoadFailed}
-                refreshFailed={refreshFailed}
+                firstLoadError={sidebarFirstLoadError}
+                refreshError={refreshError}
                 collapsed={sidebarCollapsed}
                 onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
                 onMobileClose={() => setMobileMenuOpen(false)}
