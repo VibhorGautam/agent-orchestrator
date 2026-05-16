@@ -44,7 +44,6 @@ interface SessionDetailProps {
   sidebarOrchestrators?: ProjectSidebarOrchestrator[];
   sidebarLoading?: boolean;
   sidebarError?: string | null;
-  sidebarRefreshError?: string | null;
   onRetrySidebar?: () => void;
 }
 
@@ -58,7 +57,6 @@ export function SessionDetail({
   sidebarOrchestrators,
   sidebarLoading = false,
   sidebarError = null,
-  sidebarRefreshError,
   onRetrySidebar,
 }: SessionDetailProps) {
   const router = useRouter();
@@ -68,10 +66,6 @@ export function SessionDetail({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
-  const hasCachedSidebarSessions = (sidebarSessions?.length ?? 0) > 0;
-  const sidebarFirstLoadError = !hasCachedSidebarSessions ? sidebarError : null;
-  const effectiveSidebarRefreshError =
-    sidebarRefreshError ?? (hasCachedSidebarSessions ? sidebarError : null);
   const pr = session.pr;
   const terminalEnded = isDashboardSessionTerminal(session);
   const isRestorable = isDashboardSessionRestorable(session);
@@ -182,8 +176,7 @@ export function SessionDetail({
                 sessions={sidebarSessions}
                 orchestrators={sidebarOrchestrators}
                 loading={sidebarLoading}
-                firstLoadError={sidebarFirstLoadError}
-                refreshError={effectiveSidebarRefreshError}
+                error={sidebarError}
                 onRetry={onRetrySidebar}
                 activeProjectId={session.projectId}
                 activeSessionId={session.id}

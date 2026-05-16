@@ -213,9 +213,6 @@ function SessionPageShell({
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const hasCachedSidebarSessions = (sidebarSessions?.length ?? 0) > 0;
-  const sidebarFirstLoadError = !hasCachedSidebarSessions ? sidebarError : null;
-  const sidebarRefreshError = hasCachedSidebarSessions ? sidebarError : null;
 
   const handleToggleSidebar = useCallback(() => {
     if (isMobile) {
@@ -279,8 +276,7 @@ function SessionPageShell({
               sessions={sidebarSessions}
               orchestrators={sidebarOrchestrators}
               loading={sidebarLoading}
-              firstLoadError={sidebarFirstLoadError}
-              refreshError={sidebarRefreshError}
+              error={sidebarError}
               onRetry={onRetrySidebar}
               activeProjectId={activeProjectId}
               activeSessionId={activeSessionId}

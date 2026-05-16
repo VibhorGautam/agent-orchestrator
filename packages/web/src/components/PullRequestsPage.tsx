@@ -63,7 +63,7 @@ export function PullRequestsPage({
     }
     return levels;
   }, [initialSessions, attentionZones]);
-  const { sessions, attentionLevels, firstLoadError, refreshError } = useSessionEvents({
+  const { sessions, attentionLevels, loadError } = useSessionEvents({
     initialSessions,
     project: projectId,
     muxSessions: mux?.status === "connected" ? mux.sessions : undefined,
@@ -118,8 +118,7 @@ export function PullRequestsPage({
             orchestrators={orchestratorLinks}
             activeProjectId={projectId}
             activeSessionId={undefined}
-            firstLoadError={firstLoadError}
-            refreshError={refreshError}
+            error={loadError}
             collapsed={sidebarCollapsed}
             onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
             onMobileClose={() => setMobileMenuOpen(false)}

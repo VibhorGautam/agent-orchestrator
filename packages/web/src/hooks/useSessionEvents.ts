@@ -82,16 +82,8 @@ interface State {
    * before any session data arrives.
    */
   liveSessionsResolved: boolean;
-  /** First-load error message from the live session transport. Null once live data resolves. */
+  /** Latest live session-list error. ProjectSidebar derives first-load vs stale-data UX from data presence. */
   loadError: string | null;
-  /** True when no session data has ever resolved and the live transport reports an error. */
-  firstLoadFailed: boolean;
-  /** First-load error message alias used by sidebar consumers. */
-  firstLoadError: string | null;
-  /** True when a refresh fails after cached/resolved session data is available. */
-  refreshFailed: boolean;
-  /** Refresh error message shown with stale cached data. */
-  refreshError: string | null;
 }
 
 type Action =
@@ -102,9 +94,7 @@ type Action =
       liveResolved?: boolean;
     }
   | { type: "snapshot"; patches: SessionPatch[] }
-  | { type: "muxError"; error: string }
-  | { type: "refreshError"; error: string }
-  | { type: "clearErrors" };
+  | { type: "setLoadError"; error: string | null };
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -112,96 +102,13 @@ function getErrorMessage(error: unknown): string {
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
-    case "muxError": {
-      const hasResolvedData = state.liveSessionsResolved || state.sessions.length > 0;
-      if (hasResolvedData) {
-        if (
-          state.refreshFailed &&
-          !state.firstLoadFailed &&
-          state.loadError === null &&
-          state.refreshError === action.error
-        ) {
-          return state;
-        }
-        return {
-          ...state,
-          loadError: null,
-          firstLoadError: null,
-          firstLoadFailed: false,
-          refreshFailed: true,
-          refreshError: action.error,
-        };
-      }
-
-      if (state.firstLoadFailed && !state.refreshFailed && state.loadError === action.error) {
-        return state;
-      }
-
-      return {
-        ...state,
-        loadError: action.error,
-        firstLoadFailed: true,
-        firstLoadError: action.error,
-        refreshFailed: false,
-        refreshError: null,
-      };
-    }
-    case "refreshError": {
-      const hasResolvedData = state.liveSessionsResolved || state.sessions.length > 0;
-      if (!hasResolvedData) {
-        return {
-          ...state,
-          loadError: action.error,
-          firstLoadError: action.error,
-          firstLoadFailed: true,
-          refreshFailed: false,
-          refreshError: null,
-        };
-      }
-
-      return state.refreshFailed && state.refreshError === action.error
-        ? state
-        : {
-            ...state,
-            loadError: null,
-            firstLoadError: null,
-            firstLoadFailed: false,
-            refreshFailed: true,
-            refreshError: action.error,
-          };
-    }
-    case "clearErrors":
-      if (
-        !state.firstLoadFailed &&
-        !state.refreshFailed &&
-        state.loadError === null &&
-        state.firstLoadError === null &&
-        state.refreshError === null
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        loadError: null,
-        firstLoadError: null,
-        firstLoadFailed: false,
-        refreshFailed: false,
-        refreshError: null,
-      };
+    case "setLoadError":
+      return state.loadError === action.error ? state : { ...state, loadError: action.error };
     case "reset":
       return {
         ...state,
         sessions: action.sessions,
-        ...(action.liveResolved
-          ? {
-              liveSessionsResolved: true,
-              loadError: null,
-              firstLoadError: null,
-              firstLoadFailed: false,
-              refreshFailed: false,
-              refreshError: null,
-            }
-          : {}),
+        ...(action.liveResolved ? { liveSessionsResolved: true, loadError: null } : {}),
         ...(action.attentionLevels !== undefined
           ? { attentionLevels: action.attentionLevels }
           : {}),
@@ -249,25 +156,8 @@ function reducer(state: State, action: Action): State {
         action.patches.some((p) => state.attentionLevels[p.id] !== p.attentionLevel);
 
       if (!sessionsChanged && !levelsChanged) {
-        if (
-          state.liveSessionsResolved &&
-          !state.firstLoadFailed &&
-          !state.refreshFailed &&
-          state.loadError === null &&
-          state.firstLoadError === null &&
-          state.refreshError === null
-        ) {
-          return state;
-        }
-        return {
-          ...state,
-          liveSessionsResolved: true,
-          loadError: null,
-          firstLoadError: null,
-          firstLoadFailed: false,
-          refreshFailed: false,
-          refreshError: null,
-        };
+        if (state.liveSessionsResolved && state.loadError === null) return state;
+        return { ...state, liveSessionsResolved: true, loadError: null };
       }
 
       return {
@@ -276,10 +166,6 @@ function reducer(state: State, action: Action): State {
         attentionLevels: levelsChanged ? levels : state.attentionLevels,
         liveSessionsResolved: true,
         loadError: null,
-        firstLoadError: null,
-        firstLoadFailed: false,
-        refreshFailed: false,
-        refreshError: null,
       };
     }
   }
@@ -325,10 +211,6 @@ export function useSessionEvents(options: UseSessionEventsOptions): State {
     attentionLevels: initialAttentionLevels ?? ({} as AttentionMap),
     liveSessionsResolved: false,
     loadError: null,
-    firstLoadError: null,
-    firstLoadFailed: false,
-    refreshFailed: false,
-    refreshError: null,
   });
   const sessionsRef = useRef(state.sessions);
   const initialAttentionLevelsRef = useRef(initialAttentionLevels);
@@ -422,7 +304,7 @@ export function useSessionEvents(options: UseSessionEventsOptions): State {
           if (pageUnloadingRef.current || refreshController.signal.aborted || isAbortLikeError(err))
             return;
           console.warn("[useSessionEvents] refresh failed:", err);
-          dispatch({ type: "refreshError", error: getErrorMessage(err) });
+          dispatch({ type: "setLoadError", error: getErrorMessage(err) });
           // Update timestamp on failure to prevent retry loops
           lastRefreshAtRef.current = Date.now();
         })
@@ -451,15 +333,11 @@ export function useSessionEvents(options: UseSessionEventsOptions): State {
     }, MEMBERSHIP_REFRESH_DELAY_MS);
   }, [project, attentionZones]);
 
-  // Sync mux session-fetch errors into reducer state. Successful snapshots clear
-  // these flags, so transient errors don't stay visible until muxLastError flips.
+  // Sync mux session-fetch errors into reducer state. Successful snapshots or
+  // refreshes clear this; a mux null transition also clears stale transport errors.
   useEffect(() => {
     if (disabled) return;
-    if (muxLastError) {
-      dispatch({ type: "muxError", error: muxLastError });
-    } else {
-      dispatch({ type: "clearErrors" });
-    }
+    dispatch({ type: "setLoadError", error: muxLastError ?? null });
   }, [disabled, muxLastError]);
 
   // Mux-based session updates (replaces SSE when available)

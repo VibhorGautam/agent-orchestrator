@@ -130,7 +130,7 @@ describe("ProjectSidebar", () => {
         sessions={[]}
         activeProjectId="project-1"
         activeSessionId={undefined}
-        firstLoadError="HTTP 500"
+        error="HTTP 500"
         onRetry={vi.fn()}
       />,
     );
@@ -155,7 +155,7 @@ describe("ProjectSidebar", () => {
         ]}
         activeProjectId="project-1"
         activeSessionId={undefined}
-        refreshError="GitHub API rate limited"
+        error="GitHub API rate limited"
       />,
     );
 
