@@ -142,6 +142,23 @@ describe("ProjectSidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows transient empty-sidebar failures as temporary instead of hard first-load failures", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        error="Sidebar sessions request timed out after 6000ms"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Sessions temporarily unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to load sessions")).not.toBeInTheDocument();
+    expect(screen.getByText("Sidebar sessions request timed out after 6000ms")).toBeInTheDocument();
+  });
+
   it("shows a cached-data refresh banner without replacing visible sessions", () => {
     render(
       <ProjectSidebar

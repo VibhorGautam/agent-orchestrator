@@ -42,6 +42,18 @@ interface ProjectSidebarProps {
 
 type SessionDotLevel = "respond" | "review" | "action" | "pending" | "working" | "merge" | "done";
 
+function isTransientSessionListError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("networkerror") ||
+    normalized.includes("network error")
+  );
+}
+
 function SessionDot({ level }: { level: SessionDotLevel }) {
   return (
     <div
@@ -163,6 +175,7 @@ function ProjectSidebarInner({
 }: ProjectSidebarProps) {
   const router = useRouter();
   const isLoading = loading || sessions === null;
+  const transientError = isTransientSessionListError(error);
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(activeProjectId && activeProjectId !== "all" ? [activeProjectId] : []),
@@ -917,20 +930,26 @@ function ProjectSidebarInner({
                     })
                   ) : error ? (
                     <div className="px-3 py-2">
-                      <div className="project-sidebar__empty">Failed to load sessions</div>
+                      <div className="project-sidebar__empty">
+                        {transientError
+                          ? "Sessions temporarily unavailable"
+                          : "Failed to load sessions"}
+                      </div>
                       <div
                         className="mt-1 break-words text-xs text-[var(--color-text-tertiary)]"
                         title={error}
                       >
                         {error}
                       </div>
-                      <button
-                        type="button"
-                        className="mt-2 text-xs font-medium text-[var(--color-link)] hover:underline"
-                        onClick={onRetry}
-                      >
-                        Retry
-                      </button>
+                      {onRetry ? (
+                        <button
+                          type="button"
+                          className="mt-2 text-xs font-medium text-[var(--color-link)] hover:underline"
+                          onClick={onRetry}
+                        >
+                          Retry
+                        </button>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="project-sidebar__empty">No sessions shown</div>
